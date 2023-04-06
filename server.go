@@ -1,65 +1,117 @@
 package main
 
 import (
+	"database/sql"
 	"net/http"
+	"strconv"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/labstack/echo/v4"
 )
+
+// User represents a user record in the database
 type User struct {
-	// ID    string    `json:"id" xml:"id" form:"id" query:"id"`
-	Name  string `json:"name" xml:"name" form:"name" query:"name"`
-	Email string `json:"email" xml:"email" form:"email" query:"email"`
+	ID    int    `json:"id"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
+	// Password string `json:"password"`
 }
-type allUsers []User
 
-var users = allUsers{
-	{
-		// ID:          "1",
-		Name:       "John Doe",
-		Email: 		"someone@example.com",
-	},
-}
+var db *sql.DB
+
 func main() {
-	e := echo.New()
-	e.GET("/", func(c echo.Context) error {
-		return c.String(http.StatusOK, "Hello, World!")
-	})
+	// Set up MySQL database connection
+	var err error
+	db, err = sql.Open("mysql", "root:root@tcp(localhost:3307)/test_go_db")
+	if err != nil {
+		panic(err)
+	}
+	defer db.Close()
 
-	e.POST("/users", saveUser)
-	e.GET("/users/:id", getUser)
+	// Echo instance
+	e := echo.New()
+
+	// Routes
+	e.GET("/users", getUsers)
+	e.GET("/user/:id", getUser)
+	e.POST("/users", createUser)
 	// e.PUT("/users/:id", updateUser)
 	// e.DELETE("/users/:id", deleteUser)
 
-
+	// Start server
 	e.Logger.Fatal(e.Start(":8081"))
 }
 
-// e.GET("/users/:id", getUser)
+// getUsers returns a list of all users in the database
+func getUsers(c echo.Context) error {
+	// Query database for all users
+	rows, err := db.Query("SELECT id,username,email FROM users")
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]error{"error": err})
+	}
+	defer rows.Close()
+
+	// Loop through rows and create a list of users
+	users := make([]User, 0)
+	for rows.Next() {
+		var user User
+		err := rows.Scan(&user.ID, &user.Name, &user.Email)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]any{"error": err, "message": "database error"})
+		}
+		users = append(users, user)
+	}
+
+	// Return list of users
+	return c.JSON(http.StatusOK, users)
+}
+
+// getUser returns a single user record from the database
 func getUser(c echo.Context) error {
-  	// User ID from path `users/:id`
-  	id := c.Param("id")
+	// Get user ID from URL parameters
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{"error": err, "message": "invalid user ID"})
+	}
 
-	return c.String(http.StatusOK, id)
+	// Query database for user by ID
+	row := db.QueryRow("SELECT id, username, email FROM users WHERE id = ?", id)
+
+	// Scan user data into User struct
+	var user User
+	err = row.Scan(&user.ID, &user.Name, &user.Email)
+	if err != nil {
+		return c.JSON(http.StatusNotFound, map[string]any{"message": "user not found", "error": err})
+	}
+
+	// Return user data
+	return c.JSON(http.StatusOK, user)
 }
 
-// e.POST("/save", save)
-func saveUser(c echo.Context) error {
-	// // Get name and email
-	name := c.FormValue("name")
-	email := c.FormValue("email")
-	// // fmt.Printf(name,email)
-	// return c.String(http.StatusOK, "name:" + name + ", email:" + email) 
+// createUser adds a new user record to the database
+func createUser(c echo.Context) error {
+	// Get user data from request body
+	var user User
+	err := c.Bind(&user)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid user data"})
+	}
 
-	// u := new(User)
-	// if err := c.Bind(u); err != nil {
-	// 	return err
-	// }
-	user := []allUsers {
-			Name: name, 
-			Email: email,
-		} 
-	append(user, users)
-	// return c.JSON(http.StatusCreated, u)
-	// or
-	return c.XML(http.StatusCreated, user)
+	// Insert new user record into database
+	result, err := db.Exec("INSERT INTO users (username, email) VALUES (?, ?)", user.Name, user.Email)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "database error"})
+	}
+
+	// Get ID of newly inserted user record
+	id, err := result.LastInsertId()
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "database error"})
+	}
+	user.ID = int(id)
+
+	// Return new user data
+	return c.JSON(http.StatusCreated, user)
 }
+
+//
